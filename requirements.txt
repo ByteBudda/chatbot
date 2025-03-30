@@ -1,0 +1,8 @@
+python-dotenv
+PyTelegramBotAPI
+google-generativeai
+SpeechRecognition
+pydub
+requests
+beautifulsoup4
+vaderSentiment
