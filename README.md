@@ -229,8 +229,8 @@ Choose the method of running or packaging your script that suits your needs. If 
 4.  **Скачайте скрипт бота:**
     Предполагая, что вы загрузили файл `mashaaichat_nogui.py` на свой VPS (например, с помощью `scp` или `wget`, если он находится в репозитории), убедитесь, что он находится в каталоге вашего проекта. Если он находится на GitHub, вы можете клонировать репозиторий:
     ```bash
-    git clone <URL_вашего_репозитория_GitHub>
-    cd <название_вашего_репозитория>
+    git clone https://github.com/ByteBudda/chatbot
+    cd chatbot
     ```
     Если у вас есть только файл Python, убедитесь, что он называется `mashaaichat_nogui.py`.
 
