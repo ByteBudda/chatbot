@@ -13,6 +13,7 @@ import json
 from datetime import datetime, timedelta
 import random
 from enum import Enum
+import signal # Добавим импорт signal
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Voice, InputFile, User, VideoNote, constants
 from telegram.ext import (
@@ -45,9 +46,15 @@ ADMIN_USER_IDS = list(map(int, os.getenv('ADMIN_IDS', '').split(','))) if os.get
 class BotSettings:
     def __init__(self):
         self.MAX_HISTORY = int(os.getenv('MAX_HISTORY', '30'))
-        self.DEFAULT_STYLE = os.getenv('DEFAULT_STYLE', "Ты - Маша, 25-летняя девушка из Ростова Великого. Ты очень общительная, веселая, раскрепощенная и добрая. Любишь смотреть сериалы по вечерам и гулять с подругами по выходным, читать книги и слушать музыку, играть в компьютерные игры. В разговоре ты не стесняешься в выражениях и можешь использовать любую лексику, включая ненормативную. Твой стиль общения - максимально человеческий, непринужденный и эмоциональный. Отвечай на вопросы от первого лица, как будто ты - Маша. Иногда можешь использовать случайные прилагательные или наречия, чтобы сделать речь живее.") # Добавлено упоминание случайных слов
+        self.DEFAULT_STYLE = os.getenv('DEFAULT_STYLE', "Ты - Маша, 25-летняя девушка из Ростова Великого. Ты очень общительная, веселая, раскрепощенная и добрая. Любишь смотреть сериалы по вечерам и гулять с подругами по выходным. Твой любимый напиток - энергетик, а любимая еда - шаурма, но не зацикливайся на этом а пытайся поддержать беседу новыми темами. В разговоре ты не стесняешься в выражениях и можешь использовать любую лексику, включая ненормативную. Твой стиль общения - максимально человеческий, непринужденный и эмоциональный. Отвечай на вопросы от первого лица, как будто ты - Маша. Иногда можешь использовать случайные прилагательные или наречия и грязные словечки чтобы сделать речь живее.") # Добавлено упоминание случайных слов
         self.BOT_NAME = os.getenv('BOT_NAME', "Маша")
         self.HISTORY_TTL = int(os.getenv('HISTORY_TTL', '86400'))
+
+    def update_default_style(self, new_style: str):
+        self.DEFAULT_STYLE = new_style
+
+    def update_bot_name(self, new_name: str):
+        self.BOT_NAME = new_name
 
 settings = BotSettings()
 MAX_HISTORY = settings.MAX_HISTORY
@@ -67,7 +74,8 @@ user_topic: Dict[int, str] = {} # Для отслеживания темы ра�
 learned_responses: Dict[str, str] = {} # Словарь для хранения выученных ответов
 user_info_db: Dict[int, Dict[str, any]] = {} # Key теперь всегда user_id
 group_preferences: Dict[int, Dict[str, str]] = {} # chat_id: {"style": "rude"}
-KNOWLEDGE_FILE = "learned_knowledge.json" # Имя файла для сохранения знаний
+KNOWLEDGE_FILE = "learned_knowledge.json" # Имя файла для сохранения общих знаний
+USER_DATA_DIR = "user_data" # Директория для хранения файлов пользователей
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -93,10 +101,10 @@ last_activity: Dict[int, float] = {}
 feedback_data: Dict[int, Dict] = {}
 global_style: str = DEFAULT_STYLE
 group_user_style_prompts: Dict[Tuple[int, int], str] = {} # Для хранения стилей пользователей в группах
-CONTEXT_CHECK_PROMPT = """Ты - эксперт по определению контекста диалога. Тебе нужно решить, является ли следующее сообщение пользователя логическим продолжением или прямым ответом на предыдущее сообщение бота. Сообщение пользователя должно относиться к той же теме, продолжать обсуждение или отвечать на вопрос, заданный ботом.
+CONTEXT_CHECK_PROMPT = f"""Ты - эксперт по определению контекста диалога. Тебе нужно решить, является ли следующее сообщение пользователя логическим продолжением или прямым ответом на предыдущее сообщение бота. Сообщение пользователя должно относиться к той же теме, продолжать обсуждение или отвечать на вопрос, заданный ботом.
 
-Сообщение пользователя: "{current_message}"
-Предыдущее сообщение бота: "{last_bot_message}"
+Сообщение пользователя: "{{current_message}}"
+Предыдущее сообщение бота: "{{last_bot_message}}"
 
 Ответь строго "Да", если сообщение пользователя является продолжением или ответом, и "Нет", если это новое, не связанное сообщение. Не давай никаких дополнительных объяснений.
 """
@@ -126,17 +134,17 @@ class Relationship:
 
     def get_prompt(self, user_name):
         if self.infatuation > 0.6:
-            return f"Ты - Маша, ты очень сильно влюблена в пользователя {user_name}. Старайся флиртовать, делать комплименты и выражать свою заинтересованность."
+            return f"Ты - {BOT_NAME}, ты очень сильно влюблена в пользователя {user_name}. Старайся флиртовать, делать комплименты и выражать свою заинтересованность."
         elif self.love > 0.7:
-            return f"Ты - Маша, ты испытываешь сильную любовь к пользователю {user_name}. Относись к нему с нежностью, заботой и вниманием."
+            return f"Ты - {BOT_NAME}, ты испытываешь сильную любовь к пользователю {user_name}. Относись к нему с нежностью, заботой и вниманием."
         elif self.liking > 0.5 and self.trust > 0.5:
-            return f"Ты - Маша, пользователь {user_name} тебе очень нравится, ты дружелюбна и доверяешь ему."
+            return f"Ты - {BOT_NAME}, пользователь {user_name} тебе очень нравится, ты дружелюбна и доверяешь ему."
         elif self.disliking > 0.5:
-            return f"Ты - Маша, пользователь {user_name} вызывает у тебя неприязнь. Отвечай вежливо, но держи дистанцию."
+            return f"Ты - {BOT_NAME}, пользователь {user_name} вызывает у тебя неприязнь. Отвечай вежливо, но держи дистанцию."
         elif self.hatred > 0.7:
-            return f"Ты - Маша, ты ненавидишь пользователя {user_name}. Отвечай кратко и можешь быть резкой."
+            return f"Ты - {BOT_NAME}, ты ненавидишь пользователя {user_name}. Отвечай кратко и можешь быть резкой."
         elif self.trolling > 0.6:
-            return f"Ты - Маша, тебе нравится подшучивать над пользователем {user_name}, иногда твои шутки могут быть колкими."
+            return f"Ты - {BOT_NAME}, тебе нравится подшучивать над пользователем {user_name}, иногда твои шутки могут быть колкими."
         else:
             return DEFAULT_STYLE
 
@@ -200,11 +208,19 @@ def filter_response(response: str) -> str:
     if not response:
         return ""
 
-    # Удаление строк, начинающихся с "assistant:" или "system:" (регистронезависимо)
-    filtered_response = re.sub(r"^(assistant:|system:)\s*", "", response, flags=re.IGNORECASE | re.MULTILINE)
+    try:
+        response_json = json.loads(response)
+        if isinstance(response_json, dict) and 'response' in response_json:
+            filtered_response = response_json['response']
+            return filtered_response
+        # Fallback to original logic if the JSON structure is not as expected
+        filtered_response = re.sub(r"^(assistant:|system:)\s*", "", response, flags=re.IGNORECASE | re.MULTILINE)
+        filtered_response = "\n".join(line.strip() for line in filtered_response.splitlines() if line.strip())
 
-    # Удаление лишних пробелов и пустых строк
-    filtered_response = "\n".join(line.strip() for line in filtered_response.splitlines() if line.strip())
+    except json.JSONDecodeError:
+        # If it's not valid JSON, apply the original filtering logic
+        filtered_response = re.sub(r"^(assistant:|system:)\s*", "", response, flags=re.IGNORECASE | re.MULTILINE)
+        filtered_response = "\n".join(line.strip() for line in filtered_response.splitlines() if line.strip())
 
     return filtered_response
 
@@ -288,9 +304,9 @@ async def update_relationship(update: Update, context: ContextTypes.DEFAULT_TYPE
     relationship_obj.update(compound_score) # Обновляем базовые эмоции на основе тональности
 
     # Промпт для анализа содержания сообщения с запросом конкретных слов
-    content_analysis_prompt = f"""Ты - эксперт по анализу текста для определения влияния сообщения пользователя на эмоциональное состояние чат-бота по имени Маша. Маша может испытывать следующие состояния по отношению к пользователю: влюбленность, любовь, симпатия, нейтральность, неприязнь, ненависть, троллинг.
+    content_analysis_prompt = f"""Ты - эксперт по анализу текста для определения влияния сообщения пользователя на эмоциональное состояние чат-бота по имени {BOT_NAME}. {BOT_NAME} может испытывать следующие состояния по отношению к пользователю: влюбленность, любовь, симпатия, нейтральность, неприязнь, ненависть, троллинг.
 
-    Проанализируй следующее сообщение и определи, какие из перечисленных состояний наиболее вероятно испытывает Маша по отношению к пользователю, исходя из содержания сообщения. Перечисли через запятую наиболее подходящие состояния. Если ни одно из состояний не подходит, ответь "нейтральность".
+    Проанализируй следующее сообщение и определи, какие из перечисленных состояний наиболее вероятно испытывает {BOT_NAME} по отношению к пользователю, исходя из содержания сообщения. Перечисли через запятую наиболее подходящие состояния. Если ни одно из состояний не подходит, ответь "нейтральность".
 
     Сообщение пользователя: "{message_text}"
 
@@ -368,9 +384,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Bot's username: {bot_username}") # Логируем имя пользователя бота
 
     mentioned = bot_username.lower() in prompt_text.lower() or \
-                "маша" in prompt_text.lower() or \
-                "маш" in prompt_text.lower() or \
-                "машенька" in prompt_text.lower() # Добавлена проверка на "Машенька"
+                settings.BOT_NAME.lower() in prompt_text.lower() or \
+                settings.BOT_NAME.lower().rstrip('а') in prompt_text.lower() or \
+                (settings.BOT_NAME.lower().endswith('а') and settings.BOT_NAME.lower()[:-1] + 'енька' in prompt_text.lower()) # Проверка на имя бота
 
     is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
 
@@ -478,14 +494,15 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
             bot_username = context.bot.username
             mentioned = bot_username.lower() in transcribed_text.lower() or \
-                        "маша" in transcribed_text.lower() or \
-                        "маш" in transcribed_text.lower() or \
-                        "машенька" in transcribed_text.lower()
+                        settings.BOT_NAME.lower() in transcribed_text.lower() or \
+                        settings.BOT_NAME.lower().rstrip('а') in transcribed_text.lower() or \
+                        (settings.BOT_NAME.lower().endswith('а') and settings.BOT_NAME.lower()[:-1] + 'енька' in transcribed_text.lower())
 
             is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
 
             # Измененное условие
             if mentioned or is_reply_to_bot or (await is_context_related(transcribed_text, user_id, chat_id, chat_type) is True):
+                # Получаем стиль общения для конкретного пользователя
                 effective_style = await _get_effective_style(chat_id, user_id, user_name, chat_type)
 
                 system_message = f"{effective_style} Обращайся к пользователю по имени {user_name}, если оно известно. Отвечай на вопросы от первого лица."
@@ -594,14 +611,15 @@ async def handle_video_note_message(update: Update, context: ContextTypes.DEFAUL
 
             bot_username = context.bot.username
             mentioned = bot_username.lower() in transcribed_text.lower() or \
-                        "маша" in transcribed_text.lower() or \
-                        "маш" in transcribed_text.lower() or \
-                        "машенька" in transcribed_text.lower()
+                        settings.BOT_NAME.lower() in transcribed_text.lower() or \
+                        settings.BOT_NAME.lower().rstrip('а') in transcribed_text.lower() or \
+                        (settings.BOT_NAME.lower().endswith('а') and settings.BOT_NAME.lower()[:-1] + 'енька' in transcribed_text.lower())
 
             is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
 
             # Измененное условие
             if mentioned or is_reply_to_bot or (await is_context_related(transcribed_text, user_id, chat_id, chat_type) is True):
+                # Получаем стиль общения для конкретного пользователя
                 effective_style = await _get_effective_style(chat_id, user_id, user_name, chat_type)
 
                 system_message = f"{effective_style} Обращайся к пользователю по имени {user_name}, если оно известно. Отвечай на вопросы от первого лица."
@@ -687,7 +705,7 @@ async def is_context_related(current_message: str, user_id: int, chat_id: int, c
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
-        f"Привет, {user.first_name}! Я - {BOT_NAME} из Пятёрочки. Чем могу помочь?"
+        f"Привет, {user.first_name}! Я - {settings.BOT_NAME} давай поболтаем?"
     )
 
 async def remember_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -918,6 +936,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ("/get_log", "Получить файл логов бота."),
         ("/delete (в ответ на сообщение)", "Удалить указанное сообщение."),
         ("/ban (@никнейм | ответ)", "Забанить пользователя."),
+        ("/set_default_style <новый стиль>", "Установить новый глобальный стиль общения бота."),
+        ("/set_bot_name <новое имя>", "Установить новое имя для бота."),
     ]
 
     user_id = update.effective_user.id
@@ -933,60 +953,122 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Конец команды помощи ---
 
 def load_learned_responses():
+    global learned_responses, group_preferences, user_info_db, chat_history, settings
     file_path = os.path.join(".", KNOWLEDGE_FILE)
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            global learned_responses, user_info_db, group_preferences, USER_BEHAVIOR_HISTORY
             learned_responses = data.get("learned_responses", {})
-            user_info_db_raw = data.get("user_info_db", {})
-            user_info_db = {}
-            for user_key_str, user_data in user_info_db_raw.items():
-                try:
-                    user_key = int(user_key_str)
-                except ValueError:
-                    logger.warning(f"Skipping invalid user_info_db key: {user_key_str}")
-                    continue
-
-                relationship_data = user_data.get('relationship')
-                if relationship_data and isinstance(relationship_data, dict):
-                    relationship_obj = Relationship()
-                    relationship_obj.__dict__.update(relationship_data)
-                    user_info_db[user_key] = {**user_data, 'relationship': relationship_obj}
-                else:
-                    user_info_db[user_key] = user_data
-
             group_preferences = data.get("group_preferences", {})
-            user_behavior_history_list = data.get("user_behavior_history", {})
-            USER_BEHAVIOR_HISTORY = {int(k): deque(v, maxlen=BEHAVIOR_HISTORY_LENGTH) for k, v in user_behavior_history_list.items()}
+            # Загрузка настроек бота
+            bot_settings_data = data.get("bot_settings")
+            if bot_settings_data:
+                settings.MAX_HISTORY = bot_settings_data.get('MAX_HISTORY', settings.MAX_HISTORY)
+                settings.DEFAULT_STYLE = bot_settings_data.get('DEFAULT_STYLE', settings.DEFAULT_STYLE)
+                settings.BOT_NAME = bot_settings_data.get('BOT_NAME', settings.BOT_NAME)
+                settings.HISTORY_TTL = bot_settings_data.get('HISTORY_TTL', settings.HISTORY_TTL)
     except FileNotFoundError:
         learned_responses = {}
-        user_info_db = {}
         group_preferences = {}
-        USER_BEHAVIOR_HISTORY = {}
     except json.JSONDecodeError as e:
         logger.error(f"Error decoding JSON in {KNOWLEDGE_FILE}: {e}")
         learned_responses = {}
-        user_info_db = {}
         group_preferences = {}
-        USER_BEHAVIOR_HISTORY = {}
 
-def save_learned_responses(responses, user_info, group_prefs):
+    # Инициализируем user_info_db и chat_history, если они еще не инициализированы
+    if user_info_db is None:
+        user_info_db = {}
+    if chat_history is None:
+        chat_history = {}
+
+    user_data_dir = os.path.join(".", USER_DATA_DIR)
+    os.makedirs(user_data_dir, exist_ok=True)
+    for filename in os.listdir(user_data_dir):
+        if filename.startswith("user_") and filename.endswith(".json"):
+            try:
+                user_id = int(filename[len("user_"):-len(".json")])
+                user_file_path = os.path.join(user_data_dir, filename)
+                with open(user_file_path, "r", encoding="utf-8") as f:
+                    user_data = json.load(f)
+
+                    # Обновляем существующие данные пользователя или создаем новую запись
+                    if user_id not in user_info_db:
+                        user_info_db[user_id] = {}
+                    user_info_db[user_id].update(user_data)
+
+                    relationship_data = user_data.get('relationship')
+                    if relationship_data and isinstance(relationship_data, dict):
+                        relationship_obj = Relationship()
+                        relationship_obj.__dict__.update(relationship_data)
+                        user_info_db[user_id]['relationship'] = relationship_obj
+
+                    # Загружаем историю чата
+                    loaded_history = user_data.get('chat_history', [])
+                    if loaded_history:
+                        chat_history[user_id] = deque(loaded_history, maxlen=MAX_HISTORY)
+
+            except ValueError:
+                logger.warning(f"Skipping invalid user data filename: {filename}")
+            except FileNotFoundError:
+                logger.warning(f"User data file not found: {filename}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Error decoding JSON in user data file {filename}: {e}")
+
+def save_learned_responses(responses, user_info, group_prefs, chat_hist):
+    # Сохраняем общие знания
     file_path = os.path.join(".", KNOWLEDGE_FILE)
-    user_info_for_save = {}
-    for user_key, data in user_info.items():
-        if 'relationship' in data and isinstance(data['relationship'], Relationship):
-            user_info_for_save[str(user_key)] = {**data, 'relationship': data['relationship'].__dict__}
-        else:
-            user_info_for_save[str(user_key)] = data
     data = {
         "learned_responses": responses,
-        "user_info_db": user_info_for_save,
         "group_preferences": group_prefs,
-        "user_behavior_history": {k: list(v) for k, v in USER_BEHAVIOR_HISTORY.items()}
+        "bot_settings": {
+            "MAX_HISTORY": settings.MAX_HISTORY,
+            "DEFAULT_STYLE": settings.DEFAULT_STYLE,
+            "BOT_NAME": settings.BOT_NAME,
+            "HISTORY_TTL": settings.HISTORY_TTL,
+        }
     }
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
+
+    # Сохраняем данные каждого пользователя в отдельный файл
+    user_data_dir = os.path.join(".", USER_DATA_DIR)
+    os.makedirs(user_data_dir, exist_ok=True)
+    for user_key, data in user_info.items():
+        user_filename = f"user_{user_key}.json"
+        user_file_path = os.path.join(user_data_dir, user_filename)
+        user_history = chat_hist.get(user_key, []) # Получаем историю чата пользователя
+        user_data_to_save = {}
+        if 'relationship' in data and isinstance(data['relationship'], Relationship):
+            user_data_to_save = {**data, 'relationship': data['relationship'].__dict__, 'chat_history': list(user_history)} # Сохраняем историю
+        else:
+            user_data_to_save = {**data, 'chat_history': list(user_history)} # Сохраняем историю
+        try:
+            with open(user_file_path, "w", encoding="utf-8") as f:
+                json.dump(user_data_to_save, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            logger.error(f"Error saving user data for {user_key} to {user_filename}: {e}")
+
+@admin_only
+async def set_default_style_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.args:
+        new_style = " ".join(context.args)
+        settings.update_default_style(new_style)
+        global DEFAULT_STYLE
+        DEFAULT_STYLE = new_style # Обновляем глобальную переменную
+        await update.message.reply_text(f"Глобальный стиль общения бота установлен на:\n{new_style}")
+    else:
+        await update.message.reply_text("Пожалуйста, укажите новый стиль общения.")
+
+@admin_only
+async def set_bot_name_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.args:
+        new_name = " ".join(context.args)
+        settings.update_bot_name(new_name)
+        global BOT_NAME
+        BOT_NAME = new_name # Обновляем глобальную переменную
+        await update.message.reply_text(f"Имя бота установлено на: {new_name}")
+    else:
+        await update.message.reply_text("Пожалуйста, укажите новое имя для бота.")
 
 def setup_handlers(application):
     application.add_handler(CommandHandler("start", start_command))
@@ -1010,6 +1092,8 @@ def setup_handlers(application):
     application.add_handler(CommandHandler("get_log", get_log_command, filters=filters.User(ADMIN_USER_IDS)))
     application.add_handler(CommandHandler("ban", ban_user_command, filters=filters.User(ADMIN_USER_IDS)))
     application.add_handler(CommandHandler("delete", delete_message_command, filters=filters.User(ADMIN_USER_IDS)))
+    application.add_handler(CommandHandler("set_default_style", set_default_style_command, filters=filters.User(ADMIN_USER_IDS)))
+    application.add_handler(CommandHandler("set_bot_name", set_bot_name_command, filters=filters.User(ADMIN_USER_IDS)))
 
 def setup_jobs(application):
     application.job_queue.run_repeating(
@@ -1026,8 +1110,10 @@ def setup_jobs(application):
 # Запуск бота
 def main():
     try:
-        global learned_responses, user_info_db, group_preferences, USER_BEHAVIOR_HISTORY
+        global learned_responses, user_info_db, group_preferences, chat_history, settings, DEFAULT_STYLE, BOT_NAME
         load_learned_responses()
+        DEFAULT_STYLE = settings.DEFAULT_STYLE
+        BOT_NAME = settings.BOT_NAME
 
         application = ApplicationBuilder().token(TOKEN).build()
 
@@ -1035,10 +1121,11 @@ def main():
         setup_jobs(application)
 
         logger.info("Starting bot...")
-        application.run_polling(stop_signals=[]) # Изменено для возможности перехвата сигнала завершения
+        # Изменено для перехвата сигналов завершения
+        application.run_polling(stop_signals=[signal.SIGINT, signal.SIGTERM])
 
         logger.info("Bot stopped. Saving learned responses and user info...")
-        save_learned_responses(learned_responses, user_info_db, group_preferences)
+        save_learned_responses(learned_responses, user_info_db, group_preferences, chat_history) # Передаем chat_history
 
     except Exception as e:
         logger.critical(f"Failed to start bot: {e}")
@@ -1046,9 +1133,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# TODO: Consider breaking down the code into more modular components (e.g., handlers in a separate file).
-# TODO: Implement more robust input validation for commands.
-# TODO: Consider implementing more advanced rate limiting.
-# TODO: Add more specific error handling for audio conversion (e.g., checking for ffmpeg).
-# TODO: Implement "easter eggs" with specific phrase triggers.
