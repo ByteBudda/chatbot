@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 import random
 from enum import Enum
 import signal # Добавим импорт signal
-
+from PIL import Image
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Voice, InputFile, User, VideoNote, constants
 from telegram.ext import (
     ApplicationBuilder,
@@ -1070,6 +1070,63 @@ async def set_bot_name_command(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text("Пожалуйста, укажите новое имя для бота.")
 
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update or not update.message or not update.message.photo:
+        return
+
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    chat_type = update.effective_chat.type
+    user_name = user_preferred_name.get(user_id, update.effective_user.first_name)
+
+    history_key = chat_id if chat_type in ['group', 'supergroup'] else user_id
+    await update_user_info(update)
+    await update_relationship(update, context) # Обновляем отношения для фото
+
+    bot = context.bot
+    try:
+        # Получаем информацию о самом большом разрешении фото
+        file_id = update.message.photo[-1].file_id
+        file_info = await bot.get_file(file_id)
+        file_url = file_info.file_path
+
+        response = requests.get(file_url)
+        response.raise_for_status()
+        image_data_bytes = BytesIO(response.content)
+
+        # Открываем изображение с помощью Pillow
+        image = Image.open(image_data_bytes)
+
+        effective_style = await _get_effective_style(chat_id, user_id, user_name, chat_type)
+        system_message = f"{effective_style} Обращайся к пользователю по имени {user_name}, если оно известно. Отвечай на вопросы от первого лица."
+        add_to_history(history_key, SYSTEM_ROLE, system_message)
+
+        prompt = "Ты маша. Отреагируй на фото так как это сделала бы Маша от первого лица. Выскажи мнение об изображении от первого лица или дай соответсвующую реакцию на фотографию согласно ее содержимому от имени Маши" # Можно сделать запрос более конкретным
+
+        contents = [prompt, image] # Передаем объект Image из Pillow
+
+        logger.info(f"Sending image analysis request to Gemini for user {user_id} in chat {chat_id}")
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+        response_gemini = await asyncio.to_thread(model.generate_content, contents)
+
+        if hasattr(response_gemini, 'text') and response_gemini.text:
+            logger.info(f"Gemini image analysis response: {response_gemini.text}")
+            add_to_history(history_key, ASSISTANT_ROLE, response_gemini.text)
+            greeting = random.choice(GREETINGS) + " " if not chat_history.get(history_key) or chat_history[history_key][-2].startswith(ASSISTANT_ROLE) else ""
+            farewell = " " + random.choice(FAREWELLS) if random.random() < 0.1 else ""
+            await update.message.reply_text(greeting + response_gemini.text + farewell, parse_mode=None)
+        else:
+            logger.warning("Gemini image analysis response was empty or lacked text.")
+            await update.message.reply_text("Простите, не удалось проанализировать изображение.")
+
+    except requests.exceptions.RequestException as e:
+        await update.message.reply_text(f"Ошибка при скачивании изображения: {e}")
+        logger.error(f"Error downloading image: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Произошла ошибка при анализе изображения: {e}")
+        logger.error(f"Error during image analysis: {e}")
+
 def setup_handlers(application):
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
@@ -1081,6 +1138,8 @@ def setup_handlers(application):
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
     application.add_handler(MessageHandler(filters.VIDEO_NOTE, handle_video_note_message))
+    # Добавлен обработчик для фотографий
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_error_handler(error_handler)
     application.add_handler(CallbackQueryHandler(button_callback))
 
@@ -1122,7 +1181,7 @@ def main():
 
         logger.info("Starting bot...")
         # Изменено для перехвата сигналов завершения
-        application.run_polling(stop_signals=[signal.SIGINT, signal.SIGTERM])
+        application.run_polling(stop_signals=None)
 
         logger.info("Bot stopped. Saving learned responses and user info...")
         save_learned_responses(learned_responses, user_info_db, group_preferences, chat_history) # Передаем chat_history
