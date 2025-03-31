@@ -262,7 +262,7 @@ def _construct_prompt(history: Deque[str], chat_type: str, user_names_in_chat: O
     """Формирует промпт для Gemini на основе истории чата."""
     formatted_prompt = "\n".join(history)
     if chat_type in ['group', 'supergroup'] and user_names_in_chat:
-        return f"В этом групповом чате участвуют следующие пользователи: {', '.join(user_names_in_chat)}. Запомни, кто есть кто.\n\n{formatted_prompt}"
+        return f"В этом групповом чате участвуют следующие пользователи: {', '.join(user_names_in_chat)}\n\n{formatted_prompt}"
     else:
         return formatted_prompt
 
@@ -1101,7 +1101,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         system_message = f"{effective_style} Обращайся к пользователю по имени {user_name}, если оно известно. Отвечай на вопросы от первого лица."
         add_to_history(history_key, SYSTEM_ROLE, system_message)
 
-        prompt = "Ты маша. Отреагируй на фото так как это сделала бы Маша от первого лица. Выскажи мнение об изображении от первого лица или дай соответсвующую реакцию на фотографию согласно ее содержимому от имени Маши" # Можно сделать запрос более конкретным
+        # Получаем комментарий к фото
+        caption = update.message.caption
+
+        # Формируем prompt с учетом комментария
+        if caption:
+            prompt = f"Ты маша. Отреагируй на фото и комментарий к нему так как это сделала бы Маша от первого лица. Вот фото и комментарий: Фото: [изображение]. Комментарий: {caption}. Выскажи мнение об изображении и отреагируй на комментарий от первого лица или дай соответсвующую реакцию согласно их содержимому от имени Маши"
+        else:
+            prompt = "Ты маша. Отреагируй на фото так как это сделала бы Маша от первого лица. Выскажи мнение об изображении от первого лица или дай соответсвующую реакцию на фотографию согласно ее содержимому от имени Маши" # Можно сделать запрос более конкретным
 
         contents = [prompt, image] # Передаем объект Image из Pillow
 
