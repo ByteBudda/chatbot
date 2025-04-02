@@ -89,7 +89,7 @@ pip freeze > requirements.txt
 
 **5. Конфигурация:**
 
-*   Переименуйте файл `.env.example` (если вы его создадите) в `.env` или создайте файл `.env` вручную в корневой директории проекта.
+*   Создайте файл `.env` вручную в корневой директории проекта.
 *   Заполните файл `.env` вашими данными:
 
 ```dotenv
@@ -97,12 +97,6 @@ pip freeze > requirements.txt
 TELEGRAM_BOT_TOKEN="ВАШТОКЕН" # Ваш токен Telegram бота
 GEMINI_API_KEY="ВАШ_API_КЛЮЧ_GEMINI_AI"                # Ваш API ключ Google Gemini AI
 ADMIN_IDS=32423425,34234234                   # ID администраторов через запятую (без пробелов)
-
-# Опционально (переопределяют значения по умолчанию в config.py)
-# MAX_HISTORY=50
-# DEFAULT_STYLE="Ты - строгий дворецкий Альфред."
-# BOT_NAME="Альфред"
-# HISTORY_TTL=3600 # Время жизни истории чата в секундах (1 час)
 ```
 *   **Получение ключа Gemini API:** Ключ можно получить бесплатно в [Google AI Studio](https://aistudio.google.com/app/apikey).
 
