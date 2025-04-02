@@ -3,7 +3,7 @@
  `README.md`:
 
 ```markdown
-# Маша Бот - Telegram-помощник на Google Gemini
+# MashaBotProject - Telegram чат-бот на Google Gemini
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
