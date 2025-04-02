@@ -10,6 +10,8 @@ import requests
 from PIL import Image
 from telegram import Update, constants
 from telegram.ext import ContextTypes, CallbackContext
+import pydub
+from pydub import AudioSegment # Оставьте эту строку тоже
 
 # --- Импорты из других модулей проекта ---
 from config import (ASSISTANT_ROLE, BOT_NAME, CONTEXT_CHECK_PROMPT,
@@ -233,7 +235,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
         if transcribed_text and not transcribed_text.startswith("["):
             logger.info(f"Transcription result: '{transcribed_text}'")
-            await update.message.reply_text(f"Вы сказали: \"{transcribed_text}\"", quote=True)
+            #await update.message.reply_text(f"Вы сказали: \"{transcribed_text}\"")
 
             # --- Логика ответа (аналогично handle_message) ---
             try: bot_username = (await context.bot.get_me()).username
@@ -333,7 +335,7 @@ async def handle_video_note_message(update: Update, context: ContextTypes.DEFAUL
         # --- Логика ответа (аналогично handle_voice_message) ---
         if transcribed_text and not transcribed_text.startswith("["):
             logger.info(f"Transcription result (video): '{transcribed_text}'")
-            await update.message.reply_text(f"Вы сказали (видео): \"{transcribed_text}\"", quote=True)
+            #await update.message.reply_text(f"Вы сказали (видео): \"{transcribed_text}\"")
 
             try: bot_username = (await context.bot.get_me()).username
             except Exception: bot_username = settings.BOT_NAME

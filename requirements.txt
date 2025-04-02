@@ -1,8 +1,8 @@
-python-dotenv
-PyTelegramBotAPI
+python-telegram-bot
 google-generativeai
 SpeechRecognition
 pydub
 requests
 beautifulsoup4
 vaderSentiment
+python-dotenv
