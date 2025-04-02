@@ -20,7 +20,7 @@ from bot_commands import (ban_user_command, button_callback,
                           clear_history_command, clear_my_history_command,
                           error_handler, help_command, remember_command,
                           set_bot_name_command, set_default_style_command,
-                          set_my_name_command, start_command)
+                          set_my_name_command, start_command, set_activity_command) # Добавили set_activity_command
 # ВАЖНО: Теперь main импортирует handlers, а handlers НЕ импортирует main
 from handlers import (handle_message, handle_photo, handle_video_note_message,
                     handle_voice_message)
@@ -52,6 +52,7 @@ def setup_handlers(application):
     application.add_handler(CommandHandler("ban", ban_user_command, filters=admin_filter))
     application.add_handler(CommandHandler("set_default_style", set_default_style_command, filters=admin_filter))
     application.add_handler(CommandHandler("set_bot_name", set_bot_name_command, filters=admin_filter))
+    application.add_handler(CommandHandler("set_activity", set_activity_command, filters=admin_filter)) # Регистрируем новую команду
 
     # Обработчик ошибок
     application.add_error_handler(error_handler)

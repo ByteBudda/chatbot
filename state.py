@@ -19,7 +19,7 @@ chat_history: Dict[int, Deque[str]] = {}
 last_activity: Dict[int, float] = {}
 feedback_data: Dict[int, Dict] = {} # Пока не используется
 group_user_style_prompts: Dict[Tuple[int, int], str] = {} # Пока не используется
-# USER_BEHAVIOR_HISTORY и связанные константы можно тоже сюда, если активно используются
+bot_activity_percentage: int = 100 # Добавляем процент активности бота
 
 # --- Функции управления состоянием ---
 
@@ -54,7 +54,7 @@ async def cleanup_history_job(context): # Переименовано для яс
 
 def load_all_data():
     """Загружает общее состояние и данные пользователей при старте."""
-    global learned_responses, group_preferences, user_info_db, chat_history, settings, user_preferred_name, last_activity, user_topic
+    global learned_responses, group_preferences, user_info_db, chat_history, settings, user_preferred_name, last_activity, user_topic, bot_activity_percentage
     logger.info(f"Loading data from {KNOWLEDGE_FILE} and {USER_DATA_DIR}...")
 
     # --- Загрузка общих данных ---
@@ -77,6 +77,7 @@ def load_all_data():
                     config.BOT_NAME = settings.BOT_NAME
                     config.HISTORY_TTL = settings.HISTORY_TTL
                     logger.info("Bot settings loaded and applied from knowledge file.")
+                bot_activity_percentage = data.get("bot_activity_percentage", 100) # Загрузка процента активности
         except Exception as e:
              logger.error(f"Error loading {KNOWLEDGE_FILE}: {e}", exc_info=True)
     else:
@@ -149,7 +150,8 @@ def save_all_data():
             "DEFAULT_STYLE": settings.DEFAULT_STYLE,
             "BOT_NAME": settings.BOT_NAME,
             "HISTORY_TTL": settings.HISTORY_TTL,
-        }
+        },
+        "bot_activity_percentage": bot_activity_percentage, # Сохраняем процент активности
     }
     try:
         with open(KNOWLEDGE_FILE, "w", encoding="utf-8") as f:
@@ -166,3 +168,4 @@ def save_all_data():
         saved_user_count += 1
 
     logger.info(f"All data saving complete. Saved data for {saved_user_count} users.")
+

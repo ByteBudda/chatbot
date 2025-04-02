@@ -1,3 +1,4 @@
+# bot_commands.py
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputFile
 from telegram.ext import ContextTypes, CallbackContext, CommandHandler, CallbackQueryHandler, filters
 import logging
@@ -7,8 +8,8 @@ from typing import Any
 from dotenv import load_dotenv
 from config import BOT_NAME, DEFAULT_STYLE, SYSTEM_ROLE, USER_ROLE, ASSISTANT_ROLE, MAX_HISTORY, HISTORY_TTL
 from collections import deque
-from state import add_to_history, chat_history, last_activity, user_preferred_name, group_user_style_prompts
-from config import logger, ADMIN_USER_IDS, settings # Импортируем настройки из config   
+from state import add_to_history, chat_history, last_activity, user_preferred_name, group_user_style_prompts, bot_activity_percentage
+from config import logger, ADMIN_USER_IDS, settings # Импортируем настройки из config
 
 # bot_commands.py
 # Этот файл содержит команды и обработчики для бота Telegram, включая команды для администраторов и пользователей.
@@ -177,6 +178,24 @@ async def set_bot_name_command(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text("Пожалуйста, укажите новое имя для бота.")
 
+@admin_only
+async def set_activity_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Устанавливает процент активности бота."""
+    if context.args:
+        try:
+            percentage = int(context.args[0])
+            if 0 <= percentage <= 100:
+                global bot_activity_percentage
+                bot_activity_percentage = percentage
+                await update.message.reply_text(f"Активность бота установлена на {percentage}%")
+                logger.info(f"Bot activity set to {percentage}% by admin {update.effective_user.id}")
+            else:
+                await update.message.reply_text("Процент активности должен быть в диапазоне от 0 до 100.")
+        except ValueError:
+            await update.message.reply_text("Пожалуйста, введите числовое значение процента.")
+    else:
+        await update.message.reply_text("Пожалуйста, укажите процент активности (0-100).")
+
 # --- Команда помощи ---
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = "Доступные команды:\n\n"
@@ -193,7 +212,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ("/set_bot_name <новое имя>", "Установить новое имя для бота."),
         ("/set_default_style <стиль>", "Установить глобальный стиль общения бота."),
         ("/set_group_user_style <стиль>", "Установить стиль общения для конкретного пользователя в группе."),
-        ("/reset_style", "Сбросить глобальный стиль общения бота на стандартный.")
+        ("/reset_style", "Сбросить глобальный стиль общения бота на стандартный."),
+        ("/set_activity <0-100>", "Установить процент активности бота.")
     ]
 
     user_id = update.effective_user.id
@@ -206,5 +226,3 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(help_text)
 
-
-   

@@ -13,12 +13,13 @@ from PIL import Image
 from pydub import AudioSegment
 from telegram import Update
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import random
 
 # Импорты из других модулей проекта
 from config import (logger, GEMINI_API_KEY, DEFAULT_STYLE, BOT_NAME,
                     CONTEXT_CHECK_PROMPT, ASSISTANT_ROLE, settings) # Добавили settings
 # Импортируем нужные части состояния из state.py
-from state import chat_history, user_info_db, group_preferences, group_user_style_prompts, user_preferred_name
+from state import chat_history, user_info_db, group_preferences, group_user_style_prompts, user_preferred_name, bot_activity_percentage
 
 # --- Инициализация AI и Анализатора ---
 try:
@@ -240,3 +241,13 @@ async def cleanup_audio_files_job(context): # Переименовано для 
             logger.debug("Temporary audio/video file cleanup: No files found to delete.")
     except Exception as e:
         logger.error(f"Error during temporary audio/video file cleanup: {e}")
+
+def should_process_message(activity_percentage: int) -> bool:
+    """Определяет, следует ли обрабатывать сообщение на основе процента активности."""
+    return random.randint(1, 100) <= activity_percentage
+
+def get_bot_activity_percentage() -> int:
+    """Возвращает текущий процент активности бота."""
+    from state import bot_activity_percentage
+    return bot_activity_percentage
+

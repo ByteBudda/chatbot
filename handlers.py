@@ -21,7 +21,8 @@ from state import (add_to_history, chat_history, learned_responses,
 # --- Импорт утилит ---
 from utils import (filter_response, generate_content_sync, generate_vision_content_async,
                    is_context_related, model, transcribe_voice, update_user_info,
-                   _construct_prompt, _get_effective_style) # Импортируем утилиты
+                   _construct_prompt, _get_effective_style, should_process_message,
+                   get_bot_activity_percentage) # Импортируем утилиты
 
 # --- Вспомогательная функция для обработки генерации и ответа ---
 async def _process_generation_and_reply(
@@ -74,6 +75,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt_text = update.message.text
     chat_type = chat.type
 
+    # Проверяем, нужно ли обрабатывать сообщение на основе процента активности
+    if not should_process_message(get_bot_activity_percentage()):
+        logger.debug(f"Message from {user_id} skipped due to reduced bot activity.")
+        return
+
     # Используем утилиты и состояние из utils/state
     await update_user_info(update)
     user_name = user_preferred_name.get(user_id, user.first_name)
@@ -122,6 +128,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     chat_id = chat.id
     chat_type = chat.type
+
+    # Проверяем, нужно ли обрабатывать сообщение на основе процента активности
+    if not should_process_message(get_bot_activity_percentage()):
+        logger.debug(f"Photo from {user_id} skipped due to reduced bot activity.")
+        return
 
     await update_user_info(update)
     user_name = user_preferred_name.get(user_id, user.first_name)
@@ -180,6 +191,11 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     chat_id = chat.id
     voice = update.message.voice
     chat_type = chat.type
+
+    # Проверяем, нужно ли обрабатывать сообщение на основе процента активности
+    if not should_process_message(get_bot_activity_percentage()):
+        logger.debug(f"Voice message from {user_id} skipped due to reduced bot activity.")
+        return
 
     await update_user_info(update)
     user_name = user_preferred_name.get(user_id, user.first_name)
@@ -277,6 +293,11 @@ async def handle_video_note_message(update: Update, context: ContextTypes.DEFAUL
     video_note = update.message.video_note
     chat_type = chat.type
 
+    # Проверяем, нужно ли обрабатывать сообщение на основе процента активности
+    if not should_process_message(get_bot_activity_percentage()):
+        logger.debug(f"Video note from {user_id} skipped due to reduced bot activity.")
+        return
+
     await update_user_info(update)
     user_name = user_preferred_name.get(user_id, user.first_name)
     history_key = chat_id if chat_type in ['group', 'supergroup'] else user_id
@@ -357,3 +378,4 @@ async def handle_video_note_message(update: Update, context: ContextTypes.DEFAUL
         if original_file_path and os.path.exists(original_file_path):
              try: os.remove(original_file_path)
              except OSError: pass
+
