@@ -5,7 +5,6 @@
 ```markdown
 # MashaBotProject - Telegram чат-бот на Google Gemini
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Это многофункциональный Telegram-бот по имени Маша, работающий на Python с использованием библиотеки `python-telegram-bot` и мультимодальной языковой модели **Google Gemini**. Маша обладает настраиваемой личностью, обрабатывает текстовые, голосовые и видеосообщения, **анализирует и реагирует на содержание фотографий** и может проявлять инициативу в групповых чатах.
 
