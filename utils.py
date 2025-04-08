@@ -12,8 +12,8 @@ import speech_recognition as sr
 from PIL import Image
 from pydub import AudioSegment
 from telegram import Update
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import random
+from transformers import pipeline
 
 # Импорты из других модулей проекта
 from config import (logger, GEMINI_API_KEY, DEFAULT_STYLE, BOT_NAME,
@@ -21,17 +21,56 @@ from config import (logger, GEMINI_API_KEY, DEFAULT_STYLE, BOT_NAME,
 # Импортируем нужные части состояния из state.py
 from state import chat_history, user_info_db, group_preferences, group_user_style_prompts, user_preferred_name, bot_activity_percentage
 
-# --- Инициализация AI и Анализатора ---
+# --- Инициализация AI, Анализатора и RuBERT ---
 try:
     genai.configure(api_key=GEMINI_API_KEY)
     # Используем 'gemini-1.5-flash' как рекомендованный для текста и изображений
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.0-flash')
     logger.info("Gemini AI model initialized successfully in utils.")
 except Exception as e:
     logger.critical(f"Failed to configure Gemini AI in utils: {e}")
     model = None # Установим в None, чтобы проверки ниже работали
 
-analyzer = SentimentIntensityAnalyzer() # Если используется
+
+# --- RuBERT Pipelines ---
+_ner_pipeline = None
+_sentiment_pipeline = None
+
+def get_ner_pipeline():
+    global _ner_pipeline
+    if _ner_pipeline is None:
+        try:
+            _ner_pipeline = pipeline("ner", model="Data-Lab/rubert-base-cased-conversational_ner-v3", tokenizer="Data-Lab/rubert-base-cased-conversational_ner-v3")
+            logger.info("RuBERT NER pipeline initialized.")
+        except Exception as e:
+            logger.error(f"Error initializing RuBERT NER pipeline: {e}", exc_info=True)
+            _ner_pipeline = None
+    return _ner_pipeline
+
+def get_sentiment_pipeline():
+    global _sentiment_pipeline
+    if _sentiment_pipeline is None:
+        try:
+            _sentiment_pipeline = pipeline("sentiment-analysis", model="blanchefort/rubert-base-cased-sentiment")
+            logger.info("RuBERT Sentiment Analysis pipeline initialized.")
+        except Exception as e:
+            logger.error(f"Error initializing RuBERT Sentiment Analysis pipeline: {e}", exc_info=True)
+            _sentiment_pipeline = None
+    return _sentiment_pipeline
+
+# --- Prompt Builder Class ---
+class PromptBuilder:
+    def __init__(self, bot_name, default_style):
+        self.bot_name = bot_name
+        self.default_style = default_style
+
+    def build_prompt(self, history_str, user_name, prompt_text, system_message_base, topic_context="", entities=None, sentiment=None):
+        prompt = f"{system_message_base} {topic_context}\n\nИстория диалога:\n{history_str}\n\n{user_name}: {prompt_text}\n{self.bot_name}:"
+        if entities:
+            prompt += f"\n\nИзвлеченные сущности: {entities}"
+        if sentiment:
+            prompt += f"\n\nТональность сообщения: {sentiment}"
+        return prompt
 
 # --- AI и Вспомогательные Функции ---
 
@@ -162,16 +201,6 @@ async def _get_effective_style(chat_id: int, user_id: int, user_name: Optional[s
 
     return DEFAULT_STYLE # Из config.py
 
-def _construct_prompt(history_deque: Deque[str], chat_type: str, user_names_in_chat: Optional[Set[str]] = None) -> str:
-    """Формирует промпт для Gemini на основе истории чата."""
-    base_prompt = f"Ты {settings.BOT_NAME}. Поддерживай диалог, учитывая предыдущие сообщения.\n\n" # Используем settings
-    history_str = "\n".join(history_deque)
-    if chat_type in ['group', 'supergroup'] and user_names_in_chat:
-        participants_info = f"Участники этого группового чата: {', '.join(user_names_in_chat)}.\n"
-        return base_prompt + participants_info + "История диалога:\n" + history_str
-    else:
-        return base_prompt + "История диалога:\n" + history_str
-
 async def is_context_related(current_message: str, user_id: int, chat_id: int, chat_type: str) -> bool:
     """Проверяет, связано ли сообщение пользователя с последним ответом бота."""
     history_key = chat_id if chat_type in ['group', 'supergroup'] else user_id
@@ -250,4 +279,3 @@ def get_bot_activity_percentage() -> int:
     """Возвращает текущий процент активности бота."""
     from state import bot_activity_percentage
     return bot_activity_percentage
-

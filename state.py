@@ -1,4 +1,3 @@
-# state.py
 import os
 import json
 import time
@@ -168,4 +167,3 @@ def save_all_data():
         saved_user_count += 1
 
     logger.info(f"All data saving complete. Saved data for {saved_user_count} users.")
-

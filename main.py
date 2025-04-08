@@ -1,4 +1,3 @@
-# main.py
 import asyncio
 from datetime import timedelta
 
@@ -20,7 +19,7 @@ from bot_commands import (ban_user_command, button_callback,
                           clear_history_command, clear_my_history_command,
                           error_handler, help_command, remember_command,
                           set_bot_name_command, set_default_style_command,
-                          set_my_name_command, start_command, set_activity_command) # Добавили set_activity_command
+                          set_my_name_command, start_command, set_activity_command, reset_context_command) # Добавили reset_context_command
 # ВАЖНО: Теперь main импортирует handlers, а handlers НЕ импортирует main
 from handlers import (handle_message, handle_photo, handle_video_note_message,
                     handle_voice_message)
@@ -36,6 +35,7 @@ def setup_handlers(application):
     application.add_handler(CommandHandler("remember", remember_command))
     application.add_handler(CommandHandler("clear_my_history", clear_my_history_command))
     application.add_handler(CommandHandler("setmyname", set_my_name_command))
+    application.add_handler(CommandHandler("reset_context", reset_context_command)) # Добавили обработчик для новой команды
 
     # Обработчики сообщений (импортированные из handlers.py)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

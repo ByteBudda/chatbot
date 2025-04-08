@@ -23,8 +23,12 @@ from state import (add_to_history, chat_history, learned_responses,
 # --- Импорт утилит ---
 from utils import (filter_response, generate_content_sync, generate_vision_content_async,
                    is_context_related, model, transcribe_voice, update_user_info,
-                   _construct_prompt, _get_effective_style, should_process_message,
-                   get_bot_activity_percentage) # Импортируем утилиты
+                   _get_effective_style, should_process_message,
+                   get_bot_activity_percentage, get_ner_pipeline,
+                   get_sentiment_pipeline, PromptBuilder) # Импортируем утилиты
+
+# --- Инициализация PromptBuilder ---
+prompt_builder = PromptBuilder(settings.BOT_NAME, DEFAULT_STYLE)
 
 # --- Вспомогательная функция для обработки генерации и ответа ---
 async def _process_generation_and_reply(
@@ -35,7 +39,10 @@ async def _process_generation_and_reply(
     original_input: str
 ):
     """Генерирует ответ AI, фильтрует, сохраняет и отправляет пользователю."""
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
+    chat_id = update.effective_chat.id
+    chat_type = update.effective_chat.type
+
+    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
     await asyncio.sleep(random.uniform(0.4, 1.2))
 
     # Используем generate_content_sync из utils.py
@@ -49,8 +56,11 @@ async def _process_generation_and_reply(
     if filtered and not filtered.startswith("["):
         # Используем add_to_history из state.py
         add_to_history(history_key, ASSISTANT_ROLE, filtered)
-        logger.debug(f"Sending response to chat {update.effective_chat.id}")
-        await update.message.reply_text(filtered, parse_mode=None)
+        logger.debug(f"Sending response to chat {chat_id}")
+        if chat_type == 'private':
+            await context.bot.send_message(chat_id=chat_id, text=filtered, parse_mode=None)
+        else:
+            await update.message.reply_text(filtered, parse_mode=None)
 
         if len(original_input.split()) < 10:
             # Используем learned_responses из state.py
@@ -77,48 +87,91 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt_text = update.message.text
     chat_type = chat.type
 
-    # Проверяем, нужно ли обрабатывать сообщение на основе процента активности
-    if not should_process_message(get_bot_activity_percentage()):
-        logger.debug(f"Message from {user_id} skipped due to reduced bot activity.")
-        return
-
     # Используем утилиты и состояние из utils/state
     await update_user_info(update)
     user_name = user_preferred_name.get(user_id, user.first_name)
     history_key = chat_id if chat_type in ['group', 'supergroup'] else user_id
 
-    try: bot_username = (await context.bot.get_me()).username
-    except Exception: bot_username = settings.BOT_NAME
+    ner_model = get_ner_pipeline()
+    entities = ner_model(prompt_text) if ner_model else None
+    logger.info(f"RuBERT Entities: {entities}")
 
-    mentioned = f"@{bot_username}".lower() in prompt_text.lower() or settings.BOT_NAME.lower() in prompt_text.lower()
-    is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
-    logger.debug(f"Message from {user_id}. Mentioned: {mentioned}, Reply: {is_reply_to_bot}")
+    sentiment_model = get_sentiment_pipeline()
+    sentiment_result = sentiment_model(prompt_text) if sentiment_model else None
+    sentiment = sentiment_result[0] if sentiment_result else None
+    logger.info(f"RuBERT Sentiment: {sentiment}")
 
-    should_check_context = not (mentioned or is_reply_to_bot)
-    is_related = await is_context_related(prompt_text, user_id, chat_id, chat_type) if should_check_context else False
-
-    if mentioned or is_reply_to_bot or is_related:
-        logger.info(f"Processing message from {user_name} ({user_id}). Reason: M={mentioned}, R={is_reply_to_bot}, C={is_related}")
-
+    # Логика для личных сообщений
+    if chat_type == 'private':
+        logger.info(f"Processing private message from {user_name} ({user_id}).")
         effective_style = await _get_effective_style(chat_id, user_id, user_name, chat_type)
-        system_message = f"{effective_style} Обращайся к {user_name}. Отвечай от первого лица как {settings.BOT_NAME}."
+        system_message_base = f"{effective_style} Ты - {settings.BOT_NAME}. Не начинай свои ответы с приветствия, если пользователь не поприветствовал тебя в своем сообщении."
         topic = user_topic.get(user_id)
         topic_context = f"Тема: {topic}." if topic else ""
 
         add_to_history(history_key, USER_ROLE, prompt_text, user_name=user_name if chat_type != 'private' else None)
-        add_to_history(history_key, SYSTEM_ROLE, f"{system_message} {topic_context}")
+        add_to_history(history_key, SYSTEM_ROLE, f"{system_message_base} {topic_context}")
 
         current_history = chat_history.get(history_key, deque())
-        user_names_in_chat = None
-        if chat_type in ['group', 'supergroup']:
-             user_names_in_chat = set(m.group(1) for entry in current_history if (m := re.match(r"User \((.+)\):", entry)))
-             if user_name: user_names_in_chat.add(user_name)
+        history_str = "\n".join(current_history) # Формируем историю вручную
 
-        prompt = _construct_prompt(current_history, chat_type, user_names_in_chat)
+        # Формируем промпт с помощью PromptBuilder
+        prompt = prompt_builder.build_prompt(
+            history_str=history_str,
+            user_name=user_name,
+            prompt_text=prompt_text,
+            system_message_base=system_message_base,
+            topic_context=topic_context,
+            entities=entities,
+            sentiment=sentiment
+        )
+
         await _process_generation_and_reply(update, context, history_key, prompt, prompt_text)
     else:
-        logger.info(f"Message from {user_id} ignored: '{prompt_text[:50]}...'")
+        # Проверяем, нужно ли обрабатывать сообщение на основе процента активности
+        if not should_process_message(get_bot_activity_percentage()):
+            logger.debug(f"Message from {user_id} skipped due to reduced bot activity.")
+            return
 
+        try: bot_username = (await context.bot.get_me()).username
+        except Exception: bot_username = settings.BOT_NAME
+
+        mentioned = f"@{bot_username}".lower() in prompt_text.lower() or settings.BOT_NAME.lower() in prompt_text.lower()
+        is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
+        logger.debug(f"Message from {user_id}. Mentioned: {mentioned}, Reply: {is_reply_to_bot}")
+
+        should_check_context = not (mentioned or is_reply_to_bot)
+        is_related = await is_context_related(prompt_text, user_id, chat_id, chat_type) if should_check_context else False
+
+        if mentioned or is_reply_to_bot or is_related:
+            logger.info(f"Processing message from {user_name} ({user_id}). Reason: M={mentioned}, R={is_reply_to_bot}, C={is_related}")
+
+            effective_style = await _get_effective_style(chat_id, user_id, user_name, chat_type)
+            # Добавили инструкцию и сюда
+            system_message_base = f"{effective_style} Обращайся к {user_name}. Отвечай от первого лица как {settings.BOT_NAME}. Не начинай свои ответы с приветствия, если пользователь не поприветствовал тебя в своем сообщении."
+            topic = user_topic.get(user_id)
+            topic_context = f"Тема: {topic}." if topic else ""
+
+            add_to_history(history_key, USER_ROLE, prompt_text, user_name=user_name if chat_type != 'private' else None)
+            add_to_history(history_key, SYSTEM_ROLE, f"{system_message_base} {topic_context}")
+
+            current_history = chat_history.get(history_key, deque())
+            history_str = "\n".join(current_history) # Формируем историю вручную
+
+            # Формируем промпт с помощью PromptBuilder
+            prompt = prompt_builder.build_prompt(
+                history_str=history_str,
+                user_name=user_name,
+                prompt_text=prompt_text,
+                system_message_base=system_message_base,
+                topic_context=topic_context,
+                entities=entities,
+                sentiment=sentiment
+            )
+
+            await _process_generation_and_reply(update, context, history_key, prompt, prompt_text)
+        else:
+            logger.info(f"Message from {user_id} ignored: '{prompt_text[:50]}...'")
 
 # --- Обработчик фотографий ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,7 +185,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_type = chat.type
 
     # Проверяем, нужно ли обрабатывать сообщение на основе процента активности
-    if not should_process_message(get_bot_activity_percentage()):
+    if chat_type != 'private' and not should_process_message(get_bot_activity_percentage()):
         logger.debug(f"Photo from {user_id} skipped due to reduced bot activity.")
         return
 
@@ -181,7 +234,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error handling photo for user {user_id}: {e}", exc_info=True)
         await update.message.reply_text("Произошла ошибка при обработке фото.")
 
-
 # --- Обработчик голосовых сообщений ---
 async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.voice: return
@@ -195,7 +247,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     chat_type = chat.type
 
     # Проверяем, нужно ли обрабатывать сообщение на основе процента активности
-    if not should_process_message(get_bot_activity_percentage()):
+    if chat_type != 'private' and not should_process_message(get_bot_activity_percentage()):
         logger.debug(f"Voice message from {user_id} skipped due to reduced bot activity.")
         return
 
@@ -235,34 +287,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
         if transcribed_text and not transcribed_text.startswith("["):
             logger.info(f"Transcription result: '{transcribed_text}'")
-            #await update.message.reply_text(f"Вы сказали: \"{transcribed_text}\"")
-
-            # --- Логика ответа (аналогично handle_message) ---
-            try: bot_username = (await context.bot.get_me()).username
-            except Exception: bot_username = settings.BOT_NAME
-
-            mentioned = f"@{bot_username}".lower() in transcribed_text.lower() or settings.BOT_NAME.lower() in transcribed_text.lower()
-            is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
-            should_check_context = not (mentioned or is_reply_to_bot)
-            is_related = await is_context_related(transcribed_text, user_id, chat_id, chat_type) if should_check_context else False
-
-            if mentioned or is_reply_to_bot or is_related:
-                logger.info(f"Processing transcribed text. Reason: M={mentioned}, R={is_reply_to_bot}, C={is_related}")
-                effective_style = await _get_effective_style(chat_id, user_id, user_name, chat_type)
-                system_message = f"{effective_style} Обращайся к {user_name}. Отвечай как {settings.BOT_NAME}."
-                topic = user_topic.get(user_id)
-                topic_context = f"Тема: {topic}." if topic else ""
-                add_to_history(history_key, USER_ROLE, transcribed_text, user_name=user_name if chat_type != 'private' else None)
-                add_to_history(history_key, SYSTEM_ROLE, f"{system_message} {topic_context}")
-                current_history = chat_history.get(history_key, deque())
-                user_names_in_chat = None
-                if chat_type in ['group', 'supergroup']:
-                     user_names_in_chat = set(m.group(1) for entry in current_history if (m := re.match(r"User \((.+)\):", entry)))
-                     if user_name: user_names_in_chat.add(user_name)
-                prompt = _construct_prompt(current_history, chat_type, user_names_in_chat)
-                await _process_generation_and_reply(update, context, history_key, prompt, transcribed_text)
-            else:
-                 logger.info(f"Transcribed text ignored: '{transcribed_text[:50]}...'")
+            await _handle_text_input(update, context, transcribed_text) # Используем общую функцию
         elif transcribed_text and transcribed_text.startswith("["):
              logger.warning(f"Transcription failed: {transcribed_text}")
              await update.message.reply_text(f"Не удалось распознать речь. {transcribed_text}")
@@ -282,7 +307,6 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
              try: os.remove(original_file_path)
              except OSError: pass
 
-
 # --- Обработчик видеосообщений ("кружочков") ---
 async def handle_video_note_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.video_note: return
@@ -300,6 +324,7 @@ async def handle_video_note_message(update: Update, context: ContextTypes.DEFAUL
         logger.debug(f"Video note from {user_id} skipped due to reduced bot activity.")
         return
 
+    # Используем утилиты и состояние из utils/state
     await update_user_info(update)
     user_name = user_preferred_name.get(user_id, user.first_name)
     history_key = chat_id if chat_type in ['group', 'supergroup'] else user_id
@@ -332,36 +357,74 @@ async def handle_video_note_message(update: Update, context: ContextTypes.DEFAUL
              try: os.remove(original_file_path)
              except OSError: pass
 
-        # --- Логика ответа (аналогично handle_voice_message) ---
+        # --- Логика ответа ---
         if transcribed_text and not transcribed_text.startswith("["):
             logger.info(f"Transcription result (video): '{transcribed_text}'")
-            #await update.message.reply_text(f"Вы сказали (видео): \"{transcribed_text}\"")
 
-            try: bot_username = (await context.bot.get_me()).username
-            except Exception: bot_username = settings.BOT_NAME
+            ner_model = get_ner_pipeline()
+            entities = ner_model(transcribed_text) if ner_model else None
+            logger.info(f"RuBERT Entities (video): {entities}")
 
-            mentioned = f"@{bot_username}".lower() in transcribed_text.lower() or settings.BOT_NAME.lower() in transcribed_text.lower()
-            is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
-            should_check_context = not (mentioned or is_reply_to_bot)
-            is_related = await is_context_related(transcribed_text, user_id, chat_id, chat_type) if should_check_context else False
+            sentiment_model = get_sentiment_pipeline()
+            sentiment_result = sentiment_model(transcribed_text) if sentiment_model else None
+            sentiment = sentiment_result[0] if sentiment_result else None
+            logger.info(f"RuBERT Sentiment (video): {sentiment}")
 
-            if mentioned or is_reply_to_bot or is_related:
-                logger.info(f"Processing transcribed text (video). Reason: M={mentioned}, R={is_reply_to_bot}, C={is_related}")
+            if chat_type == 'private':
+                logger.info(f"Processing transcribed text (video) in private chat.")
                 effective_style = await _get_effective_style(chat_id, user_id, user_name, chat_type)
-                system_message = f"{effective_style} Обращайся к {user_name}. Отвечай как {settings.BOT_NAME}."
+                system_message_base = f"{effective_style} Обращайся к {user_name}. Отвечай от первого лица как {settings.BOT_NAME}. Не начинай свои ответы с приветствия, если пользователь не поприветствовал тебя в своем сообщении."
                 topic = user_topic.get(user_id)
                 topic_context = f"Тема: {topic}." if topic else ""
                 add_to_history(history_key, USER_ROLE, transcribed_text + " (видео)", user_name=user_name if chat_type != 'private' else None)
-                add_to_history(history_key, SYSTEM_ROLE, f"{system_message} {topic_context}")
+                add_to_history(history_key, SYSTEM_ROLE, f"{system_message_base} {topic_context}")
+
                 current_history = chat_history.get(history_key, deque())
-                user_names_in_chat = None
-                if chat_type in ['group', 'supergroup']:
-                     user_names_in_chat = set(m.group(1) for entry in current_history if (m := re.match(r"User \((.+)\):", entry)))
-                     if user_name: user_names_in_chat.add(user_name)
-                prompt = _construct_prompt(current_history, chat_type, user_names_in_chat)
+                history_str = "\n".join(current_history)
+
+                prompt = prompt_builder.build_prompt(
+                    history_str=history_str,
+                    user_name=user_name,
+                    prompt_text=transcribed_text,
+                    system_message_base=system_message_base,
+                    topic_context=topic_context,
+                    entities=entities,
+                    sentiment=sentiment
+                )
                 await _process_generation_and_reply(update, context, history_key, prompt, transcribed_text)
             else:
-                 logger.info(f"Transcribed text (video) ignored: '{transcribed_text[:50]}...'")
+                try: bot_username = (await context.bot.get_me()).username
+                except Exception: bot_username = settings.BOT_NAME
+
+                mentioned = f"@{bot_username}".lower() in transcribed_text.lower() or settings.BOT_NAME.lower() in transcribed_text.lower()
+                is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
+                should_check_context = not (mentioned or is_reply_to_bot)
+                is_related = await is_context_related(transcribed_text, user_id, chat_id, chat_type) if should_check_context else False
+
+                if mentioned or is_reply_to_bot or is_related:
+                    logger.info(f"Processing transcribed text (video). Reason: M={mentioned}, R={is_reply_to_bot}, C={is_related}")
+                    effective_style = await _get_effective_style(chat_id, user_id, user_name, chat_type)
+                    system_message_base = f"{effective_style} Обращайся к {user_name}. Отвечай от первого лица как {settings.BOT_NAME}. Не начинай свои ответы с приветствия, если пользователь не поприветствовал тебя в своем сообщении."
+                    topic = user_topic.get(user_id)
+                    topic_context = f"Тема: {topic}." if topic else ""
+                    add_to_history(history_key, USER_ROLE, transcribed_text + " (видео)", user_name=user_name if chat_type != 'private' else None)
+                    add_to_history(history_key, SYSTEM_ROLE, f"{system_message_base} {topic_context}")
+
+                    current_history = chat_history.get(history_key, deque())
+                    history_str = "\n".join(current_history)
+
+                    prompt = prompt_builder.build_prompt(
+                        history_str=history_str,
+                        user_name=user_name,
+                        prompt_text=transcribed_text,
+                        system_message_base=system_message_base,
+                        topic_context=topic_context,
+                        entities=entities,
+                        sentiment=sentiment
+                    )
+                    await _process_generation_and_reply(update, context, history_key, prompt, transcribed_text)
+                else:
+                     logger.info(f"Transcribed text (video) ignored: '{transcribed_text[:50]}...'")
         elif transcribed_text and transcribed_text.startswith("["):
              logger.warning(f"Transcription failed (video): {transcribed_text}")
              await update.message.reply_text(f"Не удалось распознать речь в видео. {transcribed_text}")
@@ -380,4 +443,3 @@ async def handle_video_note_message(update: Update, context: ContextTypes.DEFAUL
         if original_file_path and os.path.exists(original_file_path):
              try: os.remove(original_file_path)
              except OSError: pass
-

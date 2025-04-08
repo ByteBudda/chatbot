@@ -1,4 +1,3 @@
-# bot_commands.py
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputFile
 from telegram.ext import ContextTypes, CallbackContext, CommandHandler, CallbackQueryHandler, filters
 import logging
@@ -90,7 +89,7 @@ async def set_my_name_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def my_style_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    style_info = f"Мое текущее отношение к вам: {DEFAULT_STYLE}."
+    style_info = f"Мой текущий стиль общения: {settings.DEFAULT_STYLE}."
     await update.message.reply_text(style_info)
 
 async def error_handler(update: object, context: CallbackContext):
@@ -128,7 +127,7 @@ async def set_group_user_style_command(update: Update, context: ContextTypes.DEF
 async def reset_style_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global DEFAULT_STYLE
     DEFAULT_STYLE = "дружелюбный"
-    await update.message.reply_text(f"Глобальный стиль общения бота сброшен на стандартный: {DEFAULT_STYLE}")
+    await update.message.reply_text(f"Глобальный стиль общения бота сброшен на стандартный: {settings.DEFAULT_STYLE}")
 
 async def clear_history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -163,18 +162,16 @@ async def ban_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_default_style_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         new_style = " ".join(context.args)
-        global DEFAULT_STYLE
-        DEFAULT_STYLE = new_style
-        await update.message.reply_text(f"Глобальный стиль общения бота установлен на:\n{new_style}")
+        settings.update_default_style(new_style)
+        await update.message.reply_text(f"Глобальный стиль общения бота установлен на:\n{settings.DEFAULT_STYLE}")
     else:
         await update.message.reply_text("Пожалуйста, укажите новый стиль общения.")
 
 async def set_bot_name_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         new_name = " ".join(context.args)
-        global BOT_NAME
-        BOT_NAME = new_name
-        await update.message.reply_text(f"Имя бота установлено на: {new_name}")
+        settings.update_bot_name(new_name)
+        await update.message.reply_text(f"Имя бота установлено на: {settings.BOT_NAME}")
     else:
         await update.message.reply_text("Пожалуйста, укажите новое имя для бота.")
 
@@ -185,7 +182,7 @@ async def set_activity_command(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             percentage = int(context.args[0])
             if 0 <= percentage <= 100:
-                global bot_activity_percentage
+                from state import bot_activity_percentage
                 bot_activity_percentage = percentage
                 await update.message.reply_text(f"Активность бота установлена на {percentage}%")
                 logger.info(f"Bot activity set to {percentage}% by admin {update.effective_user.id}")
@@ -196,6 +193,18 @@ async def set_activity_command(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text("Пожалуйста, укажите процент активности (0-100).")
 
+async def reset_context_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    chat_type = update.effective_chat.type
+    history_key = chat_id if chat_type in ['group', 'supergroup'] else user_id
+
+    if history_key in chat_history:
+        chat_history[history_key] = deque(maxlen=MAX_HISTORY) # Очищаем историю
+        await update.message.reply_text("Контекст разговора сброшен. Можем начать заново.")
+    else:
+        await update.message.reply_text("Контекст разговора и так был пуст.")
+
 # --- Команда помощи ---
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = "Доступные команды:\n\n"
@@ -203,6 +212,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text += "/help - Показать список доступных команд.\n"
     help_text += "/clear_my_history - Очистить вашу историю чата.\n"
     help_text += "/setmyname <имя> - Установить имя, по которому я буду к вам обращаться.\n"
+    help_text += "/reset_context - Сбросить контекст разговора.\n" # Добавлена команда
 
     admin_commands = [
         ("/clear_history <user_id>", "Очистить историю чата для указанного пользователя (по ID)."),
@@ -225,4 +235,3 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_text += "\nДля получения списка административных команд обратитесь к администратору.\n"
 
     await update.message.reply_text(help_text)
-
