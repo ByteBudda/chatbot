@@ -1,8 +1,8 @@
 
 
- `README.md`:
 
-```markdown
+
+
 # MashaBotProject - Telegram чат-бот на Google Gemini
 
 
