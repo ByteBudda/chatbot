@@ -5,7 +5,7 @@ import time
 import asyncio
 from io import BytesIO
 from functools import lru_cache
-from typing import Dict, Set, Deque, Optional
+from typing import Optional
 import json
 import google.generativeai as genai
 import speech_recognition as sr
@@ -15,24 +15,18 @@ from telegram import Update
 import random
 from transformers import pipeline
 
-# Импорты из других модулей проекта
 from config import (logger, GEMINI_API_KEY, DEFAULT_STYLE, BOT_NAME,
-                    CONTEXT_CHECK_PROMPT, ASSISTANT_ROLE, settings) # Добавили settings
-# Импортируем нужные части состояния из state.py
-from state import chat_history, user_info_db, group_preferences, group_user_style_prompts, user_preferred_name, bot_activity_percentage
+                    CONTEXT_CHECK_PROMPT, ASSISTANT_ROLE, settings)
+from state import chat_history, user_info_db, group_preferences, group_user_style_prompts, user_preferred_name
 
-# --- Инициализация AI, Анализатора и RuBERT ---
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    # Используем 'gemini-1.5-flash' как рекомендованный для текста и изображений
     model = genai.GenerativeModel('gemini-2.0-flash')
     logger.info("Gemini AI model initialized successfully in utils.")
 except Exception as e:
     logger.critical(f"Failed to configure Gemini AI in utils: {e}")
-    model = None # Установим в None, чтобы проверки ниже работали
+    model = None
 
-
-# --- RuBERT Pipelines ---
 _ner_pipeline = None
 _sentiment_pipeline = None
 
@@ -58,7 +52,6 @@ def get_sentiment_pipeline():
             _sentiment_pipeline = None
     return _sentiment_pipeline
 
-# --- Prompt Builder Class ---
 class PromptBuilder:
     def __init__(self, bot_name, default_style):
         self.bot_name = bot_name
@@ -72,11 +65,8 @@ class PromptBuilder:
             prompt += f"\n\nТональность сообщения: {sentiment}"
         return prompt
 
-# --- AI и Вспомогательные Функции ---
-
 @lru_cache(maxsize=128)
 def generate_content_sync(prompt: str) -> str:
-    """Синхронная обертка для вызова Gemini API (текст)."""
     if not model:
         logger.error("Gemini model not initialized. Cannot generate content.")
         return "[Ошибка: Модель AI не инициализирована]"
@@ -98,14 +88,12 @@ def generate_content_sync(prompt: str) -> str:
         return f"[Произошла ошибка при генерации ответа: {type(e).__name__}]"
 
 async def generate_vision_content_async(contents: list) -> str:
-    """Асинхронная функция для вызова Gemini Vision API."""
     if not model:
         logger.error("Gemini model not initialized. Cannot generate vision content.")
         return "[Ошибка: Модель AI не инициализирована]"
 
     logger.info("Sending image/prompt to Gemini Vision...")
     try:
-        # Вызов может быть синхронным внутри to_thread, если SDK не async
         response = await asyncio.to_thread(model.generate_content, contents)
         response_text = response.text if hasattr(response, 'text') else ''
         if not response_text and hasattr(response, 'prompt_feedback') and response.prompt_feedback.block_reason:
@@ -122,37 +110,24 @@ async def generate_vision_content_async(contents: list) -> str:
 def filter_response(response: str) -> str:
     if not response:
         return ""
-
-    # Remove any lines starting with "assistant:", "system:", or "user:" (case-insensitive)
     filtered_response = re.sub(r"^(assistant:|system:|user:)\s*", "", response, flags=re.IGNORECASE | re.MULTILINE)
-
-    # Remove any JSON-like structures that might have been included
     try:
-        # Attempt to load as JSON. If successful, extract text if it's a simple value or a dictionary with a 'response' key.
         response_json = json.loads(response)
         if isinstance(response_json, str):
             return response_json.strip()
         elif isinstance(response_json, dict) and 'response' in response_json and isinstance(response_json['response'], str):
             return response_json['response'].strip()
         elif isinstance(response_json, dict):
-            # If it's a dictionary, try to stringify it (though this might not be ideal, better to avoid sending JSON)
-            return "" # Returning empty string to avoid accidental JSON output
+            return ""
         elif isinstance(response_json, list):
-            return "" # Returning empty string to avoid accidental list output
+            return ""
     except json.JSONDecodeError:
-        # If it's not valid JSON, proceed with further filtering
-
-        # Remove any code blocks or other structured data that might resemble system output
         filtered_response = re.sub(r"```[\w\W]*?```", "", filtered_response)
         filtered_response = re.sub(r"`[^`]+`", "", filtered_response)
-
-    # Further cleanup: remove extra whitespace and newlines
     filtered_response = "\n".join(line.strip() for line in filtered_response.splitlines() if line.strip())
-
     return filtered_response.strip()
 
 async def transcribe_voice(file_path: str) -> Optional[str]:
-    """Распознает речь из аудиофайла."""
     logger.info(f"Attempting to transcribe audio file: {file_path}")
     recognizer = sr.Recognizer()
     try:
@@ -184,8 +159,6 @@ async def transcribe_voice(file_path: str) -> Optional[str]:
                 logger.error(f"Error deleting temporary file {file_path}: {e}")
 
 async def _get_effective_style(chat_id: int, user_id: int, user_name: Optional[str], chat_type: str) -> str:
-    """Определяет эффективный стиль общения."""
-    # Используем переменные состояния, импортированные из state.py
     if chat_type in ['group', 'supergroup']:
         group_style = group_preferences.get(chat_id, {}).get("style")
         user_group_style = group_user_style_prompts.get((chat_id, user_id))
@@ -199,26 +172,25 @@ async def _get_effective_style(chat_id: int, user_id: int, user_name: Optional[s
     if relationship_obj and hasattr(relationship_obj, 'get_prompt'):
          return relationship_obj.get_prompt(user_name)
 
-    return DEFAULT_STYLE # Из config.py
+    return DEFAULT_STYLE
 
 async def is_context_related(current_message: str, user_id: int, chat_id: int, chat_type: str) -> bool:
-    """Проверяет, связано ли сообщение пользователя с последним ответом бота."""
     history_key = chat_id if chat_type in ['group', 'supergroup'] else user_id
-    history = chat_history.get(history_key) # Из state.py
+    history = chat_history.get(history_key)
     if not history: return False
 
     last_bot_message = None
     for entry in reversed(history):
-        if entry.startswith(f"{ASSISTANT_ROLE}:"): # Из config.py
+        if entry.startswith(f"{ASSISTANT_ROLE}:"):
             last_bot_message = entry[len(ASSISTANT_ROLE)+1:].strip()
             break
     if not last_bot_message: return False
     if len(current_message.split()) < 2: return False
 
-    prompt = CONTEXT_CHECK_PROMPT.format(current_message=current_message, last_bot_message=last_bot_message) # Из config.py
+    prompt = CONTEXT_CHECK_PROMPT.format(current_message=current_message, last_bot_message=last_bot_message)
     logger.debug(f"Checking context for user {user_id} in chat {chat_id}")
     try:
-        response_text = await asyncio.to_thread(generate_content_sync, prompt) # Используем общую функцию
+        response_text = await asyncio.to_thread(generate_content_sync, prompt)
         logger.debug(f"Context check response: {response_text}")
         is_related = response_text.strip().lower().startswith("да")
         logger.info(f"Context check result for user {user_id}: {is_related}")
@@ -228,12 +200,11 @@ async def is_context_related(current_message: str, user_id: int, chat_id: int, c
         return False
 
 async def update_user_info(update: Update):
-    """Обновляет информацию о пользователе в user_info_db."""
     if not update.effective_user: return
 
     user = update.effective_user
     user_id = user.id
-    if user_id not in user_info_db: # user_info_db из state.py
+    if user_id not in user_info_db:
         user_info_db[user_id] = {"preferences": {}, "first_seen": time.time()}
 
     user_info_db[user_id]["username"] = user.username
@@ -243,20 +214,18 @@ async def update_user_info(update: Update):
     user_info_db[user_id]["language_code"] = user.language_code
     user_info_db[user_id]["last_seen"] = time.time()
 
-    if user_id not in user_preferred_name: # user_preferred_name из state.py
+    if user_id not in user_preferred_name:
         user_preferred_name[user_id] = user.first_name
 
     logger.debug(f"User info updated for user_id: {user_id}")
 
-async def cleanup_audio_files_job(context): # Переименовано для ясности
-    """Периодическая задача для удаления временных аудиофайлов."""
-    # context не используется
+async def cleanup_audio_files_job(context):
     bot_folder = "."
     deleted_count = 0
     logger.debug("Starting temporary audio file cleanup...")
     try:
         for filename in os.listdir(bot_folder):
-            if filename.lower().endswith((".wav", ".oga", ".mp4")): # Добавили mp4 для видеозаметок
+            if filename.lower().endswith((".wav", ".oga", ".mp4")):
                 file_path = os.path.join(bot_folder, filename)
                 try:
                     os.remove(file_path)
@@ -272,10 +241,8 @@ async def cleanup_audio_files_job(context): # Переименовано для 
         logger.error(f"Error during temporary audio/video file cleanup: {e}")
 
 def should_process_message(activity_percentage: int) -> bool:
-    """Определяет, следует ли обрабатывать сообщение на основе процента активности."""
     return random.randint(1, 100) <= activity_percentage
 
 def get_bot_activity_percentage() -> int:
-    """Возвращает текущий процент активности бота."""
     from state import bot_activity_percentage
     return bot_activity_percentage
